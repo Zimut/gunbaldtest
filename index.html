@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GUNBALD — Roguelike Artillery</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="stage">
+    <canvas id="game" width="1280" height="720"></canvas>
+
+    <!-- ===== Main Menu ===== -->
+    <div id="menu" class="panel screen">
+      <div class="logo">
+        <span class="logo-gun">GUN</span><span class="logo-bald">BALD</span>
+        <div class="logo-sub">a roguelike artillery brawl</div>
+      </div>
+      <div class="menu-card">
+        <div id="meta-line" class="meta-line"></div>
+        <button id="btn-play" class="big-btn">START RUN</button>
+        <button id="btn-online" class="big-btn online-btn">PLAY ONLINE</button>
+        <button id="btn-meta" class="ghost-btn">GARAGE / UNLOCKS</button>
+      </div>
+      <div class="hint-foot">
+        <b>A/D</b> or <b>◄ ►</b> move &nbsp;·&nbsp; <b>W/S</b> or <b>▲ ▼</b> aim &nbsp;·&nbsp;
+        <b>Hold MOUSE</b> to charge, release to fire
+      </div>
+    </div>
+
+    <!-- ===== Opening Mega-Upgrade Pick ===== -->
+    <div id="upgrade" class="panel screen hidden">
+      <h2 id="upgrade-title" class="up-title">CHOOSE YOUR MEGA-UPGRADE</h2>
+      <div id="upgrade-timer" class="pick-timer">15</div>
+      <div id="upgrade-cards" class="card-row"></div>
+      <div id="combo-hint" class="combo-hint"></div>
+      <div id="upgrade-note" class="pick-note"></div>
+    </div>
+
+    <!-- ===== Per-turn Upgrade Bar (during the enemy turn) ===== -->
+    <div id="turnpick" class="turnpick hidden">
+      <div class="turnpick-head">
+        <span id="turnpick-title">UPGRADE — pick one</span>
+        <span id="turnpick-timer" class="tp-timer">15</span>
+      </div>
+      <div id="turnpick-cards" class="tp-cards"></div>
+    </div>
+
+    <!-- ===== Online Matchmaking ===== -->
+    <div id="online" class="panel screen hidden">
+      <div class="logo" style="transform:rotate(-2deg)">
+        <span class="logo-gun">ONLINE</span><span class="logo-bald"> PvP</span>
+      </div>
+      <div class="online-card">
+        <div id="online-msg" class="online-msg">Connecting…</div>
+        <div class="spinner"></div>
+        <div id="online-sub" class="online-sub"></div>
+        <button id="btn-online-cancel" class="ghost-btn">CANCEL</button>
+      </div>
+    </div>
+
+    <!-- ===== Garage / Meta ===== -->
+    <div id="garage" class="panel screen hidden">
+      <h2 class="up-title">GARAGE</h2>
+      <div id="garage-body" class="garage-body"></div>
+      <button id="btn-garage-back" class="ghost-btn">BACK</button>
+    </div>
+
+    <!-- ===== Game Over ===== -->
+    <div id="gameover" class="panel screen hidden">
+      <h2 id="go-title" class="go-title">RUN OVER</h2>
+      <div id="go-body" class="go-body"></div>
+      <button id="btn-retry" class="big-btn">NEW RUN</button>
+      <button id="btn-menu" class="ghost-btn">MAIN MENU</button>
+    </div>
+
+    <!-- ===== Toast / unlock popups ===== -->
+    <div id="toasts"></div>
+  </div>
+
+  <script src="js/core.js?v=3"></script>
+  <script src="js/terrain.js?v=3"></script>
+  <script src="js/data.js?v=3"></script>
+  <script src="js/entities.js?v=3"></script>
+  <script src="js/ai.js?v=3"></script>
+  <script src="js/net.js?v=3"></script>
+  <script src="js/ui.js?v=3"></script>
+  <script src="js/game.js?v=3"></script>
+</body>
+</html>

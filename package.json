@@ -1,0 +1,12 @@
+{
+  "name": "gunbald",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GUNBALD — roguelike artillery brawl with online PvP. Zero runtime dependencies.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
