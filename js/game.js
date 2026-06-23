@@ -162,6 +162,7 @@
   //  BATTLE UPDATE
   // ---------------------------------------------------------
   P.updateBattle = function (dt) {
+    if (!this.terrain) return;   // online guest waiting for the host's round — no terrain yet
     if (this.bannerTime > 0) this.bannerTime -= dt;
     this.shake *= Math.pow(0.86, dt * 60); if (this.shake < 0.3) this.shake = 0;
     this.flash = M.approach(this.flash, 0, dt * 2.2);

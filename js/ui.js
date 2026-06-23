@@ -398,8 +398,8 @@
     // ---------------------------------------------------------
     //  HTML PANELS
     // ---------------------------------------------------------
-    panels: ['menu', 'upgrade', 'garage', 'gameover'],
-    hideAll() { this.panels.forEach(p => el(p).classList.add('hidden')); this.hidePick(); },
+    panels: ['menu', 'online', 'upgrade', 'garage', 'gameover'],
+    hideAll() { this.panels.forEach(p => { const e = el(p); if (e) e.classList.add('hidden'); }); this.hidePick(); },
     show(id) { el(id).classList.remove('hidden'); },
 
     refreshMenu(save) {
