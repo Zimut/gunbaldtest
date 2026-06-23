@@ -41,12 +41,17 @@
     UI.hideAll(); UI.refreshMenu(this.save); UI.show('menu');
 
     let last = performance.now();
+    let acc = 0;
+    const STEP = 1 / 60;            // fixed-timestep sim -> deterministic across machines (online sync)
     const frame = now => {
       let dt = (now - last) / 1000; last = now;
-      if (dt > 0.05) dt = 0.05; if (dt < 0) dt = 0;
-      this.update(dt);
+      if (dt > 0.25) dt = 0.25; if (dt < 0) dt = 0;
+      acc += dt;
+      let ran = false, n = 0;
+      while (acc >= STEP && n < 5) { this.update(STEP); acc -= STEP; ran = true; n++; }
+      if (n >= 5) acc = 0;          // drop backlog after a long stall, avoid spiral-of-death
       this.render();
-      GB.Input.endFrame();
+      if (ran) GB.Input.endFrame(); // only clear input edges once a step has consumed them
       requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
@@ -883,12 +888,19 @@
   };
 
   P.resolveTurnOnline = function () {
-    // my shot just settled — I'm authoritative for its outcome
-    GB.Net.send({ t: 'sync', craters: this.turnCraters, me: this.netState(this.player), opp: this.netState(this.enemy) });
-    this.turnCraters = [];
-    if (this.player.dead) { this.endMatchOnline(false); return; }
-    if (this.enemy.dead) { this.endMatchOnline(true); return; }
-    this.beginEnemyTurnOnline(true);
+    if (this.turn === 'player') {
+      // MY shot settled — I'm authoritative for it; broadcast the result + hand over
+      GB.Net.send({ t: 'sync', craters: this.turnCraters, me: this.netState(this.player), opp: this.netState(this.enemy) });
+      this.turnCraters = [];
+      if (this.player.dead) { this.endMatchOnline(false); return; }
+      if (this.enemy.dead) { this.endMatchOnline(true); return; }
+      this.beginEnemyTurnOnline(true);
+    } else {
+      // opponent's shot was simulated locally for instant feedback — DON'T broadcast;
+      // wait for their authoritative sync to confirm the outcome and hand the turn back
+      this.phase = 'aim';            // inert during the opponent's turn (online has no AI)
+      this.netOppShotResolved = true;
+    }
   };
 
   P.beginEnemyTurnOnline = function (openPick) {
@@ -939,17 +951,19 @@
   };
 
   P.netRecvShot = function (m) {
+    // simulate the opponent's shot locally & immediately (real terrain + physics),
+    // so the joiner doesn't wait for the authoritative sync to see the ground break
     this.enemy.x = m.x; this.enemy.aim = m.aim; this.enemy.groundAngle = m.ga || 0; this.enemy.airborne = false;
-    this.fireVisual(this.enemy, m.charge);
+    this.netOppShotResolved = false;
+    this.fire(this.enemy, m.charge);   // owner = enemy -> doesn't re-broadcast, doesn't record my craters
   };
 
   P.netRecvSync = function (m) {
-    this.projectiles = this.projectiles.filter(p => !p.netVisual);
-    for (const c of (m.craters || [])) {
-      this.terrain.crater(c.x, c.y, c.r);
-      this.explosionFx(c.x, c.y, c.r, '#ff9a4a', c.r > 58);
-    }
-    this.shake = Math.min(20, this.shake + (m.craters && m.craters.length ? 10 : 0));
+    // clear any in-flight shells from the local simulation of the opponent's shot
+    this.projectiles.length = 0;
+    // re-carve the authoritative craters (idempotent — guarantees terrain matches the shooter)
+    for (const c of (m.craters || [])) this.terrain.crater(c.x, c.y, c.r);
+    // snap to authoritative HP/positions (corrects any drift between the two machines)
     this.applyNetState(this.enemy, m.me);   // sender's own splonk == my enemy
     this.applyNetState(this.player, m.opp); // sender's opponent == me
     this.netAwaitOppShot = false;
