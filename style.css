@@ -148,6 +148,12 @@ body{
   display:flex;flex-direction:column;gap:.5vh;
 }
 .turnpick.mega{border-color:var(--hot);box-shadow:0 0 26px rgba(255,90,60,.5);}
+.turnpick.legendary{border-color:#c77dff;box-shadow:0 0 30px rgba(199,125,255,.6);}
+.tp-rar{font-size:.85em;padding:.05vh .5vw;border-radius:6px;font-weight:900;}
+.tp-common{background:#5a627a;color:#fff;}
+.tp-rare{background:var(--gold);color:var(--ink);}
+.tp-legendary{background:#c77dff;color:#fff;}
+.turnpick.legendary #turnpick-title{color:#d9a8ff;}
 .turnpick-head{display:flex;align-items:center;justify-content:center;gap:1vw;}
 #turnpick-title{font-size:1.2vw;font-weight:900;color:var(--gold);letter-spacing:.04em;}
 .turnpick.mega #turnpick-title{color:var(--hot);}

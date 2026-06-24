@@ -20,9 +20,7 @@
 
     // ---- base stats ----
     this.maxHp = 150; this.hp = 150;
-    this.maxEnergy = 100; this.energy = 100;
-    this.moveCost = 0.85;             // energy per pixel
-    this.aim = 45;                    // degrees, carried across rounds
+    this.aim = 35;                    // degrees from horizontal (player: set from the mouse)
     this.mods = {};
     this.upgrades = [];               // upgrade ids (for visuals + combos)
 
@@ -33,13 +31,20 @@
     this.reflectPct = 0;
     this.windResist = 0;
     this.gripFall = 0; this.knockResist = 0;
-    this.powerMin = 6; this.powerMax = 18; this.chargeRate = 1;
+    this.powerMin = 7; this.powerMax = 20; this.chargeRate = 1;
     this.bounceCount = 0; this.clusterCount = 0; this.homingStr = 0;
     this.extraPick = 0;
 
+    // ---- platformer movement ----
+    this.runSpeed = GB.RUN; this.jumpV = GB.JUMP_V;
+    this.maxAirJumps = 1; this.airJumpsLeft = 1;   // 1 air-jump = double jump
+    this.wallSlideSpeed = GB.WALLSLIDE; this.fallMul = 1;
+    this.onGround = false; this.wallSliding = false;
+    this.moveDir = 0; this.wantJump = false;
+
     // ---- visual / physics state ----
-    this.vx = 0; this.vy = 0; this.airborne = false;
-    this.groundAngle = 0;   // chassis tilt (radians) to match the terrain slope it stands on
+    this.vx = 0; this.vy = 0;
+    this.groundAngle = 0;
     this.flash = 0; this.bob = GB.rand(0, 6); this.hitWobble = 0;
     this.dead = false; this.outOfArena = false;
     this.tookDamageThisRound = false;
@@ -60,11 +65,13 @@
   Splonk.prototype.centerY = function () { return this.y - 26 * this.scale; };
   Splonk.prototype.radius = function () { return 22 * this.scale; };
 
-  // gun pivot point (follows the chassis tilt so it sits where the drawn turret base is)
+  // gun pivot point (chassis is upright in the platformer)
   Splonk.prototype.pivot = function () {
-    const sc = this.scale, ga = this.groundAngle || 0;
-    return { x: this.x + Math.sin(ga) * 28 * sc, y: this.y - Math.cos(ga) * 28 * sc };
+    const sc = this.scale;
+    return { x: this.x, y: this.y - 30 * sc };
   };
+  Splonk.prototype.boxHalfW = function () { return 18 * this.scale; };
+  Splonk.prototype.boxH = function () { return 44 * this.scale; };
 
   // resting ground level under the chassis FOOTPRINT (not just the centre pixel),
   // so the bot can't perch on a thin sliver of terrain left between craters.
@@ -75,7 +82,7 @@
     const x = (atX == null ? this.x : atX) | 0;
     const foot = Math.round(15 * this.scale);
     const ys = [];
-    for (let dx = -foot; dx <= foot; dx += 3) ys.push(terrain.surfaceY(M.clamp(x + dx, 0, GB.W - 1)));
+    for (let dx = -foot; dx <= foot; dx += 3) ys.push(terrain.surfaceY(M.clamp(x + dx, 0, GB.WORLD_W - 1)));
     ys.sort((a, b) => a - b);
     return ys[Math.min(ys.length - 1, Math.floor(ys.length * 0.55))];
   };
@@ -93,14 +100,10 @@
     yr = M.clamp(yr, yc - cap, yc + cap);
     return M.clamp(Math.atan2(yr - yl, 2 * d), -0.7, 0.7);
   };
-  // aim unit vector. Aim is measured RELATIVE TO THE SLOPE the chassis rests on
-  // (GunBound-style: the turret is fixed to the body), so the local aim direction
-  // is rotated by groundAngle into world space.
+  // aim unit vector (world space; aim is elevation from horizontal in the facing dir)
   Splonk.prototype.aimVec = function () {
     const a = M.deg2rad(this.aim);
-    const lx = this.facing * Math.cos(a), ly = -Math.sin(a);
-    const ga = this.groundAngle || 0, cg = Math.cos(ga), sg = Math.sin(ga);
-    return { x: lx * cg - ly * sg, y: lx * sg + ly * cg };
+    return { x: this.facing * Math.cos(a), y: -Math.sin(a) };
   };
   Splonk.prototype.barrelTip = function () {
     const p = this.pivot(), v = this.aimVec();
@@ -135,7 +138,6 @@
   };
 
   Splonk.prototype.startTurn = function (game) {
-    this.energy = this.maxEnergy;
     if (this.repairPerTurn > 0 && this.hp > 0) {
       const heal = Math.min(this.repairPerTurn, this.maxHp - this.hp);
       if (heal > 0) { this.hp += heal; game.addFloater(this.x, this.centerY() - 30, '+' + heal, '#6fcf57'); }
@@ -167,20 +169,60 @@
         game.addFloater(attacker.x, attacker.centerY() - 50, 'REFLECT', '#42c6ff');
       }
     }
-    // knockback
+    // knockback — added to velocity; the platformer step launches & re-lands the bot
     if (kx || ky) {
       const kr = (1 - this.knockResist);
       this.vx += kx * kr; this.vy += ky * kr;
-      if (Math.abs(this.vy) > 0.5 || Math.abs(this.vx) > 0.5) this.airborne = true;
+      if (this.vy < -0.5) this.onGround = false;
     }
     if (this.hp <= 0) { this.hp = 0; this.dead = true; }
     return dealt;
   };
 
+  // ---- platformer collision helpers (against the terrain pixel mask) ----
+  Splonk.prototype.solidRow = function (T, x, py, hw) {
+    for (let xx = x - hw; xx <= x + hw; xx += 4) if (T.solidAt(xx, py)) return true;
+    return T.solidAt(x - hw, py) || T.solidAt(x + hw, py);
+  };
+  Splonk.prototype.solidCol = function (T, px, y0, y1) {
+    for (let yy = y0; yy <= y1; yy += 4) if (T.solidAt(px, yy)) return true;
+    return T.solidAt(px, y1);
+  };
+  Splonk.prototype.moveAxisY = function (T, amt, hw, bh) {
+    const dir = amt > 0 ? 1 : (amt < 0 ? -1 : 0);
+    if (dir === 0) return;
+    const n = Math.ceil(Math.abs(amt));
+    for (let i = 0; i < n; i++) {
+      const ny = this.y + dir;
+      if (dir > 0) { if (this.solidRow(T, this.x, ny, hw)) { if (this.vy > 9) { const fd = (this.vy - 9) * 1.8 * (1 - this.gripFall); if (fd > 1) this._fallDmg = fd; } this.vy = 0; this.onGround = true; return; } }
+      else { if (this.solidRow(T, this.x, ny - bh, hw)) { this.vy = 0; return; } }
+      this.y = ny;
+    }
+  };
+  Splonk.prototype.moveAxisX = function (T, amt, hw, bh) {
+    const dir = amt > 0 ? 1 : (amt < 0 ? -1 : 0);
+    if (dir === 0) return;
+    const top = this.y - bh + 6, bot = this.y - 6, n = Math.ceil(Math.abs(amt)), step = GB.STEP_H * this.scale;
+    for (let i = 0; i < n; i++) {
+      const nx = this.x + dir, edge = nx + dir * hw;
+      if (this.solidCol(T, edge, top, bot)) {
+        let stepped = false;                         // auto-step over small ledges/slopes
+        for (let up = 2; up <= step; up += 2) {
+          if (!this.solidCol(T, edge, top - up, bot - up)) { this.y -= up; this.x = nx; stepped = true; break; }
+        }
+        if (!stepped) { this.vx = 0; return; }
+      } else this.x = nx;
+    }
+  };
+
+  // drop the bot straight down onto the first solid surface at its x (spawn placement)
   Splonk.prototype.settle = function (game) {
-    this.y = this.groundY(game.terrain);
-    this.airborne = false; this.vx = 0; this.vy = 0;
-    this.groundAngle = this.terrainAngle(game.terrain);   // snap tilt to the slope
+    const T = game.terrain, hw = this.boxHalfW();
+    this.vx = 0; this.vy = 0; this.onGround = false; this.groundAngle = 0;
+    this.airJumpsLeft = this.maxAirJumps;
+    this.y = 80;
+    for (let i = 0; i < GB.WORLD_H && !this.solidRow(T, this.x, this.y + 1, hw); i++) this.y += 1;
+    this.onGround = true;
   };
 
   Splonk.prototype.update = function (dt, game) {
@@ -189,58 +231,50 @@
     this.fireRecoil = M.approach(this.fireRecoil, 0, 0.08);
     this.bob += dt;
     if (this.dead) return;
-
-    const surf = this.groundY(game.terrain);
-    if (this.airborne) {
-      this.vy += GB.GRAVITY;
-      this.x += this.vx; this.y += this.vy;
-      this.vx *= 0.985;
-      if (this.y >= surf && this.vy >= 0) {
-        this.y = surf;
-        if (this.vy > 6.5) {
-          const fd = (this.vy - 6.5) * 2.4 * (1 - this.gripFall);
-          if (fd > 1) this.takeDamage(fd, null, 0, 0, game);
-        }
-        this.airborne = false; this.vx = 0; this.vy = 0;
-      }
-      // fell out of the arena
-      if (this.x < -24 || this.x > GB.W + 24 || this.y > GB.H + 80) {
-        this.outOfArena = true; this.dead = true; this.hp = 0;
-      }
-    } else {
-      // ground vanished beneath us -> fall
-      if (surf - this.y > 4) { this.airborne = true; this.vy = 0; }
-      else this.y = surf;
-    }
-
-    // ease the chassis tilt toward the ground slope (upright while airborne)
-    const targetAngle = this.airborne ? 0 : this.terrainAngle(game.terrain);
-    this.groundAngle += (targetAngle - this.groundAngle) * Math.min(1, 12 * dt);
+    this.physStep(game);
   };
 
-  // move horizontally on the player's turn (returns true if moved)
-  // time-based: distance/turn (energy budget) is unchanged, only the speed
-  Splonk.prototype.tryWalk = function (dir, game, dt) {
-    if (this.airborne || this.energy <= 0) return false;
-    const step = GB.MOVE_SPEED * (dt || GB.TICK);
-    const cost = step * this.moveCost;
-    if (this.energy < cost * 0.5) return false;
-    const nx = M.clamp(this.x + dir * step, 26, GB.W - 26);
-    if (nx === this.x) return false;
-    // climb check: don't walk into a steep wall (use footprint ground level)
-    const nsurf = this.groundY(game.terrain, nx);
-    if (this.y - nsurf > 34) return false; // too tall to climb
-    this.x = nx;
-    this.y = nsurf;
-    this.energy = Math.max(0, this.energy - cost);
-    this.walkAnim = (this.walkAnim || 0) + step;
-    return true;
+  // one fixed-step of platformer physics: run / jump / double-jump / wall-slide
+  Splonk.prototype.physStep = function (game) {
+    const T = game.terrain, hw = this.boxHalfW(), bh = this.boxH();
+    const top = this.y - bh + 6, bot = this.y - 6;
+    const dir = this.moveDir || 0;
+    // horizontal accel / friction
+    if (dir !== 0) this.vx = M.approach(this.vx, dir * this.runSpeed, GB.RUN_ACCEL);
+    else this.vx = M.approach(this.vx, 0, GB.RUN_FRICTION);
+    // wall contact
+    const wallL = this.solidCol(T, this.x - hw - 2, top, bot);
+    const wallR = this.solidCol(T, this.x + hw + 2, top, bot);
+    // jump (edge-triggered via this.wantJump)
+    if (this.wantJump) {
+      if (this.onGround) { this.vy = -this.jumpV; this.onGround = false; this.airJumpsLeft = this.maxAirJumps; }
+      else if (this.wallSliding && (wallL || wallR)) { this.vy = -this.jumpV * 0.96; this.vx = (wallL ? 1 : -1) * this.runSpeed * 1.15; this.airJumpsLeft = this.maxAirJumps; }
+      else if (this.airJumpsLeft > 0) { this.vy = -this.jumpV * 0.9; this.airJumpsLeft--; }
+      this.wantJump = false;
+    }
+    // gravity
+    this.vy += GB.GRAV_P * (this.fallMul || 1);
+    // wall-slide (pressing into a wall while falling)
+    this.wallSliding = false;
+    if (!this.onGround && this.vy > 0 && ((wallL && dir < 0) || (wallR && dir > 0))) {
+      this.vy = Math.min(this.vy, this.wallSlideSpeed); this.wallSliding = true; this.airJumpsLeft = Math.max(this.airJumpsLeft, 1);
+    }
+    if (this.vy > GB.TERMINAL) this.vy = GB.TERMINAL;
+    // integrate with collision
+    this.onGround = false; this._fallDmg = 0;
+    this.moveAxisX(T, this.vx, hw, bh);
+    this.moveAxisY(T, this.vy, hw, bh);
+    if (this.solidRow(T, this.x, this.y + 2, hw)) { this.onGround = true; this.airJumpsLeft = this.maxAirJumps; }
+    if (this._fallDmg > 1) { this.takeDamage(this._fallDmg, null, 0, 0, game); this._fallDmg = 0; }
+    // (facing is set externally: mouse for the player, AI/network for the enemy)
+    // fell out of the world
+    if (this.y > GB.WORLD_H + 60 || this.x < -40 || this.x > GB.WORLD_W + 40) { this.outOfArena = true; this.dead = true; this.hp = 0; }
   };
 
   // ---- DRAW (cartoony, evolves with upgrades) ----
   Splonk.prototype.draw = function (ctx, time, isActive) {
     const sc = this.scale;
-    const bob = this.airborne ? 0 : Math.sin(this.bob * 2) * 1.5;
+    const bob = this.onGround ? Math.sin(this.bob * 2) * 1.5 : 0;
     ctx.save();
     ctx.translate(this.x, this.y + bob);
     const wob = Math.sin(time * 30) * this.hitWobble * 4;
@@ -533,7 +567,7 @@
     this.life++;
 
     // out of bounds (sides/bottom). top is open (lobs).
-    if (this.x < -40 || this.x > GB.W + 40 || this.y > GB.H + 60) this.dead = true;
+    if (this.x < -40 || this.x > GB.WORLD_W + 40 || this.y > GB.WORLD_H + 60) this.dead = true;
     if (this.life > 2400) this.explode(game);
   };
 
@@ -721,6 +755,59 @@
     ctx.globalAlpha = 1; ctx.textAlign = 'left';
   };
   GB.Floater = Floater;
+
+  // ===========================================================
+  //  LOOT BOX — walk into it to trigger an upgrade pick
+  // ===========================================================
+  function LootBox(o) {
+    this.x = o.x; this.y = o.y;
+    this.cat = o.cat;            // weapon | defense | mobility | utility
+    this.rarity = o.rarity;      // common | rare | legendary
+    this.taken = false;
+    this.t = GB.rand(0, 6);
+    this.r = 17;
+  }
+  LootBox.prototype.overlaps = function (s) {
+    if (this.taken) return false;
+    const hw = s.boxHalfW(), bh = s.boxH();
+    return Math.abs(s.x - this.x) < hw + this.r && this.y > s.y - bh - this.r && this.y < s.y + this.r;
+  };
+  LootBox.prototype.draw = function (ctx, time) {
+    if (this.taken) return;
+    const bob = Math.sin((time + this.t) * 2.2) * 4;
+    const x = this.x, y = this.y + bob, r = this.r;
+    const leg = this.rarity === 'legendary', rare = this.rarity === 'rare';
+    const glow = leg ? [201, 125, 255] : (rare ? [255, 207, 63] : null);
+    ctx.save();
+    if (glow) {
+      ctx.globalCompositeOperation = 'lighter';
+      const pulse = 0.5 + 0.5 * Math.sin(time * 4 + this.t);
+      const g = ctx.createRadialGradient(x, y, 2, x, y, r * 2.5);
+      g.addColorStop(0, GB.rgba(glow[0], glow[1], glow[2], 0.25 + 0.35 * pulse));
+      g.addColorStop(1, GB.rgba(glow[0], glow[1], glow[2], 0));
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r * 2.5, 0, 7); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    const body = leg ? '#4a2070' : (rare ? '#6e5018' : '#4f3826');
+    const trim = leg ? '#c77dff' : (rare ? '#ffd24a' : '#8a6a4a');
+    ctx.fillStyle = body; ctx.strokeStyle = trim; ctx.lineWidth = 3;
+    GB.roundRect(ctx, x - r, y - r, r * 2, r * 2, 6); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = trim; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x - r, y - r * 0.35); ctx.lineTo(x + r, y - r * 0.35); ctx.stroke();
+    ctx.fillStyle = trim; ctx.beginPath(); ctx.arc(x, y - r * 0.35, 2.4, 0, 7); ctx.fill();
+    // category icon
+    ctx.font = '900 ' + Math.round(r * 1.05) + 'px serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(GB.CAT_ICON[this.cat] || '❔', x, y + 3);
+    if (leg) {
+      ctx.fillStyle = '#fff';
+      for (let i = 0; i < 3; i++) { const a = time * 3 + i * 2.1; ctx.globalAlpha = 0.5 + 0.5 * Math.sin(a * 2); ctx.beginPath(); ctx.arc(x + Math.cos(a) * r * 1.6, y + Math.sin(a) * r * 1.4, 2, 0, 7); ctx.fill(); }
+      ctx.globalAlpha = 1;
+    }
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.restore();
+  };
+  GB.LootBox = LootBox;
 
   // ===========================================================
   //  small drawing utils

@@ -32,7 +32,7 @@
       if (d < min) min = d;
       if (d < tr) return 0;
       if (i > 2 && game.terrain.solidAt(x, y)) break;
-      if (x < -60 || x > GB.W + 60 || y > GB.H + 60) break;
+      if (x < -60 || x > GB.WORLD_W + 60 || y > GB.WORLD_H + 60) break;
     }
     return min;
   }
@@ -47,10 +47,10 @@
     const wr = shooter.windResist || 0;
     const pmin = shooter.powerMin, pmax = shooter.powerMax;
 
-    // search the same slope-relative aim range the player has (-10..88)
+    // wide aim range (can shoot downward at targets on lower platforms)
     let best = { aim: 45, power: pmax, miss: Infinity };
     // coarse sweep
-    for (let ang = -10; ang <= 88; ang += 3) {
+    for (let ang = -55; ang <= 88; ang += 3) {
       for (let pw = pmin + 1; pw <= pmax; pw += 1.0) {
         const miss = simulate(game, ox, oy, facing, ang, pw, wr, target, blen, ga);
         if (miss < best.miss) best = { aim: ang, power: pw, miss };
@@ -77,11 +77,11 @@
       let desiredX = shooter.x;
       const dx = target.x - shooter.x;
       const gap = Math.abs(dx);
-      const idealGap = M.lerp(520, 240, aggr); // aggressive want closer
-      const maxMove = shooter.energy / shooter.moveCost; // px budget
-      if (gap > idealGap + 60) desiredX = shooter.x + M.sign(dx) * Math.min(maxMove, gap - idealGap);
-      else if (gap < idealGap - 120 && aggr < 0.5) desiredX = shooter.x - M.sign(dx) * Math.min(maxMove, 120);
-      desiredX = M.clamp(desiredX, 40, GB.W - 40);
+      const idealGap = M.lerp(620, 280, aggr); // aggressive want closer
+      const maxMove = 350 + aggr * 450;         // how far it'll reposition this turn
+      if (gap > idealGap + 80) desiredX = shooter.x + M.sign(dx) * Math.min(maxMove, gap - idealGap);
+      else if (gap < idealGap - 140 && aggr < 0.5) desiredX = shooter.x - M.sign(dx) * Math.min(maxMove, 160);
+      desiredX = M.clamp(desiredX, 60, GB.WORLD_W - 60);
       // jitter for erratic / low-accuracy bots
       if (acc < 0.6) desiredX += GB.rand(-40, 40) * (1 - acc);
 
@@ -93,7 +93,7 @@
       let power = shot.power * (1 + GB.rand(-errPow, errPow));
       // wind misread for non-snipers
       if (acc < 0.85) aim += game.wind * (1 - acc) * 14;
-      aim = M.clamp(aim, -12, 89);   // slope-relative range, matches the player
+      aim = M.clamp(aim, -55, 89);
       power = M.clamp(power, shooter.powerMin, shooter.powerMax);
 
       return { aim, power, desiredX, miss: shot.miss };

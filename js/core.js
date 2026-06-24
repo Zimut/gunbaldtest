@@ -7,17 +7,30 @@ window.GB = window.GB || {};
 (function (GB) {
   'use strict';
 
-  // ---- world constants (internal canvas resolution) ----
+  // ---- viewport (canvas) ----
   GB.W = 1280;
   GB.H = 720;
-  GB.GRAVITY = 0.30;        // px / tick^2
+  // ---- world (larger than the viewport; a camera scrolls over it) ----
+  GB.WORLD_W = 2560;
+  GB.WORLD_H = 1200;
+  GB.GRAVITY = 0.30;        // px / tick^2 — PROJECTILE gravity
   GB.TICK = 1 / 60;
-  GB.GROUND_PAD = 0;       // sky margin handled by terrain gen
+  GB.GROUND_PAD = 0;
 
-  // ---- pacing (tuned 4x slower than the original feel) ----
-  GB.MOVE_SPEED = 36;       // px/sec walk speed (was ~144 px/sec). Energy budget unchanged.
+  // ---- projectile / charge / turn pacing ----
   GB.PROJ_TS = 0.25;        // projectile time-scale: same arc, played back 4x slower
-  GB.CHARGE_RATE = 1 / 5.2; // charge fraction per second (was 1/1.3 -> 4x slower)
+  GB.CHARGE_RATE = 1 / 4.0; // charge fraction per second
+  GB.TURN_TIME = 14;        // seconds per turn (free movement; firing ends it early)
+
+  // ---- platformer movement (per fixed 1/60 tick) ----
+  GB.GRAV_P = 0.62;         // player gravity (snappier than shells)
+  GB.RUN = 5.4;             // run speed (px/tick)
+  GB.RUN_ACCEL = 0.9;
+  GB.RUN_FRICTION = 0.85;
+  GB.JUMP_V = 12.0;         // jump impulse
+  GB.TERMINAL = 16;         // max fall speed
+  GB.WALLSLIDE = 2.6;       // fall speed while wall-sliding
+  GB.STEP_H = 16;           // auto-step height (walk up small ledges/slopes)
 
   // ---- math helpers ----
   const M = {

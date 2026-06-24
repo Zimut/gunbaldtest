@@ -34,6 +34,13 @@ Then open http://localhost:8123. Open it in **two** browser windows and click **
    ```
    The client auto-selects `ws://` or `wss://` based on the page's protocol, so serving the page over HTTPS just works.
 
+## Controls (platformer)
+- **A / D** (or ← / →) — run
+- **W / Space** (or ↑) — jump; press again in the air to **double-jump**; jump into a wall to **wall-jump**
+- **Mouse** — aim (the cannon points at the cursor); **hold** to charge, **release** to fire
+- Each turn is a **~14-second countdown** — move freely, grab **loot boxes** (walk into them for an instant 3-option upgrade pick), then fire to end your turn early (or let the timer run out).
+- Loot box icon = category (⚔️ weapon · 🛡️ defense · ⚡ mobility · 🎯 utility); rarity = power (plain → gold glow → purple legendary). Rarer boxes sit in harder-to-reach spots and respawn each round.
+
 ## How online works
 - The server only does matchmaking + relays JSON between the two matched peers.
 - Each match is **turn-authoritative**: the host seeds an identical battlefield on both clients; the player whose turn it is simulates their shot and sends the authoritative result (craters + HP + positions), which the opponent applies. This keeps both clients perfectly in sync without lockstep.

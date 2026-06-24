@@ -56,14 +56,6 @@
         GB.roundRect(ctx, x - w / 2, sy, w * M.clamp(s.shield / s.shieldMax, 0, 1), 3, 2); ctx.fill();
       }
 
-      // energy bar (player only, on its turn)
-      if (s.isPlayer) {
-        const ey = y + h + (s.shieldMax > 0 ? 18 : 12);
-        ctx.fillStyle = 'rgba(0,0,0,.45)';
-        GB.roundRect(ctx, x - w / 2 - 1, ey - 1, w + 2, 5, 3); ctx.fill();
-        ctx.fillStyle = '#b98bff';
-        GB.roundRect(ctx, x - w / 2, ey, w * M.clamp(s.energy / s.maxEnergy, 0, 1), 3, 2); ctx.fill();
-      }
       ctx.textAlign = 'left';
     },
 
@@ -314,8 +306,8 @@
       ctx.font = '700 15px Trebuchet MS, sans-serif';
       ctx.globalAlpha = 0.85;
       const msg = game.charging
-        ? 'release to FIRE'
-        : 'A/D move  ·  W/S aim  ·  hold MOUSE to charge';
+        ? 'release to FIRE (ends turn)'
+        : 'A/D run  ·  W/Space jump (×2)  ·  MOUSE aim, hold to charge';
       ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(26,16,48,.8)';
       ctx.strokeText(msg, GB.W / 2, GB.H - 22);
       ctx.fillStyle = '#fff';
@@ -329,7 +321,7 @@
       if (game.turn !== 'player' || !(game.phase === 'aim' || game.phase === 'charging')) return;
       const t = Math.max(0, game.turnTimer || 0);
       const cx = GB.W / 2, cy = 78, r = 20;
-      const frac = M.clamp(t / 15, 0, 1);
+      const frac = M.clamp(t / GB.TURN_TIME, 0, 1);
       const low = t <= 5;
       ctx.save();
       ctx.translate(cx, cy);
@@ -351,46 +343,42 @@
       ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
     },
 
-    // coin-flip animation deciding who shoots first
-    drawCoinflip(ctx, game) {
-      const c = game.coin;
-      const prog = c.t / c.dur;
-      const freq = M.lerp(13, 2.5, prog);
-      let lit;
-      if (prog < 0.82) lit = (Math.floor(c.t * freq) % 2 === 0) ? game.player : game.enemy;
-      else lit = c.result === 'player' ? game.player : game.enemy;
-      // glow ring around the lit bot
-      if (lit && !lit.dead) {
+    // coin-flip glow ring around the highlighted bot (drawn in WORLD space)
+    drawCoinflipRing(ctx, game) {
+      const c = game.coin; if (!c) return;
+      const prog = c.t / c.dur, freq = M.lerp(13, 2.5, prog);
+      const lit = prog < 0.82 ? ((Math.floor(c.t * freq) % 2 === 0) ? game.player : game.enemy)
+        : (c.result === 'player' ? game.player : game.enemy);
+      if (!lit || lit.dead) return;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const pulse = 0.5 + 0.5 * Math.sin(game.time * 18);
+      ctx.strokeStyle = GB.rgba(255, 220, 90, 0.5 + pulse * 0.4);
+      ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(lit.x, lit.centerY(), 46 * lit.scale, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+      if (prog >= 0.82) {
         ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        const pulse = 0.5 + 0.5 * Math.sin(game.time * 18);
-        ctx.strokeStyle = GB.rgba(255, 220, 90, 0.5 + pulse * 0.4);
-        ctx.lineWidth = 5;
-        ctx.beginPath(); ctx.arc(lit.x, lit.centerY(), 44 * lit.scale, 0, Math.PI * 2); ctx.stroke();
-        ctx.restore();
-        // "1st" badge once settled
-        if (prog >= 0.82) {
-          ctx.save();
-          ctx.font = '900 20px Trebuchet MS, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(26,16,48,.9)';
-          ctx.strokeText('1st!', lit.x, lit.y - 80 * lit.scale);
-          ctx.fillStyle = '#ffcf3f';
-          ctx.fillText('1st!', lit.x, lit.y - 80 * lit.scale);
-          ctx.restore();
-          ctx.textAlign = 'left';
-        }
+        ctx.font = '900 22px Trebuchet MS, sans-serif'; ctx.textAlign = 'center';
+        ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(26,16,48,.9)';
+        ctx.strokeText('1st!', lit.x, lit.y - 82 * lit.scale);
+        ctx.fillStyle = '#ffcf3f'; ctx.fillText('1st!', lit.x, lit.y - 82 * lit.scale);
+        ctx.restore(); ctx.textAlign = 'left';
       }
-      // headline
+    },
+    // coin-flip headline (SCREEN space)
+    drawCoinflipHeadline(ctx, game) {
+      const c = game.coin; if (!c) return;
+      const prog = c.t / c.dur;
       ctx.save();
       ctx.textAlign = 'center';
       ctx.font = '900 40px Trebuchet MS, sans-serif';
       ctx.lineWidth = 8; ctx.strokeStyle = 'rgba(26,16,48,.9)';
       const msg = prog < 0.82 ? 'WHO FIRES FIRST?'
-        : (c.result === 'player' ? 'YOU FIRE FIRST!' : 'ENEMY FIRES FIRST');
-      ctx.strokeText(msg, GB.W / 2, GB.H * 0.26);
+        : (c.result === 'player' ? 'YOU FIRE FIRST!' : 'OPPONENT FIRES FIRST');
+      ctx.strokeText(msg, GB.W / 2, GB.H * 0.22);
       ctx.fillStyle = '#ffcf3f';
-      ctx.fillText(msg, GB.W / 2, GB.H * 0.26);
+      ctx.fillText(msg, GB.W / 2, GB.H * 0.22);
       ctx.restore();
       ctx.textAlign = 'left';
     },
@@ -451,6 +439,19 @@
         el('upgrade').classList.add('hidden');
         el('turnpick').classList.remove('hidden');
       }
+    },
+
+    // loot-box pick: compact bottom bar showing the box's category + rarity
+    showLootPick(box, choices, ownedIds, onPick) {
+      const rar = box.rarity;
+      el('turnpick-title').innerHTML =
+        (GB.CAT_ICON[box.cat] || '') + ' ' + (GB.CAT_NAME[box.cat] || '') +
+        ' <span class="tp-rar tp-' + rar + '">' + rar.toUpperCase() + '</span> — pick one';
+      el('turnpick-timer').textContent = '🎁';
+      el('turnpick').className = 'turnpick' + (rar === 'legendary' ? ' legendary' : (rar === 'rare' ? ' mega' : ''));
+      this._buildCards(el('turnpick-cards'), choices, ownedIds, onPick, true, null);
+      el('upgrade').classList.add('hidden');
+      el('turnpick').classList.remove('hidden');
     },
 
     updatePickTimer(t) {

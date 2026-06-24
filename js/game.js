@@ -22,9 +22,10 @@
     this.state = 'menu';
     this.terrain = null;
     this.time = 0; this.shake = 0; this.flash = 0;
-    this.projectiles = []; this.particles = []; this.floaters = []; this.clouds = [];
+    this.projectiles = []; this.particles = []; this.floaters = []; this.clouds = []; this.lootBoxes = [];
     this.bannerTime = 0; this.bannerText = '';
     this.online = false; this.turnCraters = [];
+    this.cam = { x: 0, y: 0 };
 
     // buttons
     el('btn-play').onclick = () => this.startRun();
@@ -121,42 +122,110 @@
   };
 
   P.startRound = function () {
+    this.online = false;
     this.isBoss = this.round % 5 === 0;
     const theme = GB.Terrain.THEMES[(this.round - 1) % GB.Terrain.THEMES.length];
     this.terrain = new GB.Terrain({ theme });
-    this.wind = GB.rand(-0.14, 0.14);
-    this.clouds = [];
-    for (let i = 0; i < 5; i++) this.clouds.push({ x: GB.rand(0, GB.W), y: GB.rand(40, 190), s: GB.rand(0.6, 1.5), v: GB.rand(4, 13) * (GB.chance(0.5) ? 1 : -1) });
+    this.wind = GB.rand(-0.12, 0.12);
+    this.makeClouds();
 
-    // place player
-    this.player.x = GB.rand(150, 330);
-    this.player.facing = 1;
-    this.player.airborne = false;
-    this.player.settle(this);
-    this.player.tookDamageThisRound = false;
-
-    // enemy
+    this.player.x = this.groundSpawnX(GB.rand(200, 520));
+    this.player.facing = 1; this.player.settle(this); this.player.tookDamageThisRound = false;
     this.enemy = this.makeEnemy(this.round);
-    this.enemy.x = GB.rand(GB.W - 330, GB.W - 150);
-    this.enemy.facing = -1;
-    this.enemy.settle(this);
-    this.enemy.tookDamageThisRound = false;
+    this.enemy.x = this.groundSpawnX(GB.rand(GB.WORLD_W - 520, GB.WORLD_W - 200));
+    this.enemy.facing = -1; this.enemy.settle(this); this.enemy.tookDamageThisRound = false;
 
-    this.turn = null;
-    this.phase = 'opening';
+    this.spawnLoot();
+    this.centerCamOn(this.player);
+
+    this.turn = null; this.phase = 'pre';
     this.charging = false; this.charge = 0; this.chargeOwner = null;
-    this.enemyPhase = null; this.resolveDelay = 0.35;
-    this.shake = 0; this.flash = 0;
-    this.pick = null;
+    this.enemyPhase = null; this.resolveDelay = 0.4;
+    this.shake = 0; this.flash = 0; this.pick = null;
     this.player.firstShotMul = 1; this.enemy.firstShotMul = 1;
 
     this.state = 'battle';
-    this.battlePhase = 'opening';
     UI.hideAll();
+    this.startCoinflip();   // loot boxes provide upgrades — no opening pick
+  };
 
-    // both sides choose a mega-upgrade before any shots; enemy auto-picks now
-    this.enemyAutoPick('mega');
-    this.beginPick('mega', true);
+  // ---- world helpers ----
+  P.makeClouds = function () {
+    this.clouds = [];
+    for (let i = 0; i < 6; i++) this.clouds.push({ x: GB.rand(0, GB.W), y: GB.rand(30, 200), s: GB.rand(0.6, 1.5), v: GB.rand(4, 13) * (GB.chance(0.5) ? 1 : -1) });
+  };
+  P.groundSpawnX = function (x) {
+    x = M.clamp(x | 0, 60, GB.WORLD_W - 60);
+    for (let d = 0; d < 700; d += 18) {
+      for (const c of [x - d, x + d]) {
+        const cx = M.clamp(c, 60, GB.WORLD_W - 60);
+        if (this.terrain.surfaceY(cx) < GB.WORLD_H - 60) return cx;
+      }
+    }
+    return x;
+  };
+  P.centerCamOn = function (s) {
+    if (!this.cam) this.cam = { x: 0, y: 0 };
+    this.cam.x = M.clamp(s.x - GB.W / 2, 0, GB.WORLD_W - GB.W);
+    this.cam.y = M.clamp(s.y - GB.H * 0.62, 0, GB.WORLD_H - GB.H);
+  };
+  P.updateCamera = function (dt) {
+    if (!this.cam) this.cam = { x: 0, y: 0 };
+    let fx, fy;
+    if (this.projectiles.length) { fx = this.projectiles[0].x; fy = this.projectiles[0].y; }
+    else { const s = this.turn === 'enemy' ? this.enemy : this.player; fx = s.x; fy = s.y - 40; }
+    const tx = M.clamp(fx - GB.W / 2, 0, GB.WORLD_W - GB.W);
+    const ty = M.clamp(fy - GB.H * 0.55, 0, GB.WORLD_H - GB.H);
+    const k = Math.min(1, 6 * dt);
+    this.cam.x += (tx - this.cam.x) * k;
+    this.cam.y += (ty - this.cam.y) * k;
+  };
+
+  // ---- loot boxes ----
+  P.spawnLoot = function () {
+    this.lootBoxes = [];
+    const T = this.terrain, cats = GB.CATEGORIES;
+    for (const pl of (T.platforms || [])) {
+      if (this.lootBoxes.length >= 8) break;
+      let rarity;
+      if (pl.overhang || pl.y < GB.WORLD_H * 0.34) rarity = GB.chance(0.55) ? 'legendary' : 'rare';
+      else if (pl.y < GB.WORLD_H * 0.5) rarity = GB.chance(0.6) ? 'rare' : 'common';
+      else rarity = GB.chance(0.28) ? 'rare' : 'common';
+      this.lootBoxes.push(new GB.LootBox({ x: pl.x + pl.w / 2, y: pl.y - 24, cat: GB.pick(cats), rarity }));
+    }
+    for (let i = 0; i < 3; i++) {
+      const gx = this.groundSpawnX(GB.rand(250, GB.WORLD_W - 250));
+      this.lootBoxes.push(new GB.LootBox({ x: gx, y: T.surfaceY(gx) - 22, cat: GB.pick(cats), rarity: GB.chance(0.78) ? 'common' : 'rare' }));
+    }
+    this.lootBoxes.forEach((b, i) => (b.index = i));
+  };
+
+  P.checkLoot = function (s, isLocal) {
+    if (this.pick) return;
+    for (const b of this.lootBoxes) {
+      if (b.overlaps(s)) {
+        if (isLocal) this.openLootPick(b);
+        else { b.taken = true; if (s === this.enemy && !this.online) s.applyUpgrade(GB.pick(GB.lootChoices(b.cat, b.rarity)).id); }
+        return;
+      }
+    }
+  };
+
+  P.openLootPick = function (box) {
+    this.pick = { loot: true, box: box, choices: GB.lootChoices(box.cat, box.rarity), resolved: false, timer: 99 };
+    this.player.moveDir = 0;
+    UI.showLootPick(box, this.pick.choices, this.player.upgrades, id => this.resolveLootPick(box, id));
+  };
+  P.resolveLootPick = function (box, id) {
+    if (!this.pick || this.pick.resolved) return;
+    this.pick.resolved = true; box.taken = true;
+    const before = GB.activeCombos(this.player.upgrades).map(c => c.id);
+    this.player.applyUpgrade(id);
+    const nc = GB.activeCombos(this.player.upgrades).find(c => before.indexOf(c.id) < 0);
+    if (nc) { UI.toast('⚡ COMBO: ' + nc.name, 'unlock'); this.comboTriggeredThisRun = true; }
+    else UI.toast('Got: ' + (GB.UP_BY_ID[id] ? GB.UP_BY_ID[id].name : ''));
+    if (this.online) GB.Net.send({ t: 'loot', i: box.index, id: id });
+    UI.hidePick(); this.pick = null;
   };
 
   P.banner = function (text, sub, color) {
@@ -173,7 +242,8 @@
     this.flash = M.approach(this.flash, 0, dt * 2.2);
 
     this.player.update(dt, this);
-    this.enemy.update(dt, this);
+    // during the opponent's online turn the enemy is network-driven (move stream / sync)
+    if (!(this.online && this.turn === 'enemy')) this.enemy.update(dt, this);
 
     // one-time death burst
     if (this.enemy.dead && !this.enemy._boom) { this.enemy._boom = true; this.deathFx(this.enemy); }
@@ -182,8 +252,9 @@
     this.updateProjectiles();
     this.updateParticles();
 
+    this.updateCamera(dt);
+
     // ----- pre-combat / transition phases -----
-    if (this.battlePhase === 'opening') { this.updateOpening(dt); return; }
     if (this.battlePhase === 'coinflip') {
       this.coin.t += dt;
       if (this.coin.t >= this.coin.dur) this.beginCombat(this.coin.result);
@@ -194,38 +265,30 @@
       if (this.wonTimer <= 0) this.startRound();
       return;
     }
+    if (this.battlePhase !== 'combat') return;   // netwait / matchover handled by net code
 
-    // ----- combat -----
-    // per-turn upgrade pick countdown (15s) — runs concurrently with the enemy turn
-    if (this.pick && !this.pick.resolved) {
-      this.pick.timer -= dt;
-      UI.updatePickTimer(Math.max(0, this.pick.timer));
-      if (this.pick.timer <= 0) this.resolvePick(GB.pick(this.pick.choices).id);
-    }
-    // player shooting-turn countdown (15s)
-    if (this.turn === 'player' && (this.phase === 'aim' || this.phase === 'charging')) {
-      this.turnTimer -= dt;
-      if (this.turnTimer <= 0) this.autoFire();
-    }
+    // stop the inactive splonk from drifting
+    (this.turn === 'player' ? this.enemy : this.player).moveDir = 0;
 
     if (this.phase === 'projectile') {
-      const settled = this.projectiles.length === 0 &&
-        (this.player.dead || !this.player.airborne) &&
-        (this.enemy.dead || !this.enemy.airborne);
-      if (settled) {
-        this.resolveDelay -= dt;
-        if (this.resolveDelay <= 0) this.resolveTurn();
-      } else {
-        this.resolveDelay = 0.4;
-      }
-    } else if (this.phase === 'await') {
-      // enemy turn finished; wait for the player to finish picking before their turn
-      if (!this.pick || this.pick.resolved) this.beginPlayerTurn();
-    } else if (this.bannerTime < 1.15) {
-      if (this.turn === 'player') this.handlePlayerInput(dt);
-      else if (this.turn === 'enemy' && !this.online) this.handleEnemyTurn(dt);
-      // online enemy turn is driven by network messages (netRecvShot/netRecvSync)
+      if (this.projectiles.length === 0) { this.resolveDelay -= dt; if (this.resolveDelay <= 0) this.resolveTurn(); }
+      else this.resolveDelay = 0.4;
+      return;
     }
+
+    if (this.turn === 'player' && (this.phase === 'aim' || this.phase === 'charging')) {
+      this.turnTimer -= dt;
+      if (this.turnTimer <= 0) {                 // out of time -> turn ends (no shot)
+        if (this.pick) this.resolveLootPick(this.pick.box, this.pick.choices[0].id);
+        this.player.moveDir = 0; this.charging = false; this.resolveTurn();
+        return;
+      }
+      if (this.pick) return;                     // loot-box pick is open -> wait for the click
+      if (this.bannerTime < 1.0) this.handlePlayerInput(dt);
+    } else if (this.turn === 'enemy' && !this.online) {
+      if (this.bannerTime < 1.0) this.handleEnemyTurn(dt);
+    }
+    // online enemy turn is driven by network messages
   };
 
   // ---------------------------------------------------------
@@ -326,52 +389,57 @@
   P.startTurnTimer = function () { this.turnTimer = 15; };
 
   P.beginPlayerTurn = function () {
-    this.turn = 'player';
-    this.phase = 'aim';
+    this.turn = 'player'; this.phase = 'aim';
     this.charging = false; this.charge = 0; this.chargeOwner = null;
-    this.turnCraters = [];            // capture this turn's craters for the online sync
+    this.turnCraters = [];
+    this.player.moveDir = 0; this.player.wantJump = false; this.player._jumpHeld = false;
+    this.player.facing = this.enemy.x >= this.player.x ? 1 : -1;
     this.player.startTurn(this);
-    this.startTurnTimer();
+    this.turnTimer = GB.TURN_TIME;
     UI.hidePick();
-    this.banner('YOUR TURN', null, '#6fcf57');
+    this.banner('YOUR TURN', 'Move · grab loot · fire to end', '#6fcf57');
   };
 
   P.beginEnemyTurn = function () {
-    this.turn = 'enemy';
-    this.phase = 'aim';
+    this.turn = 'enemy'; this.phase = 'aim';
     this.charging = false; this.charge = 0; this.chargeOwner = null;
+    this.enemy.moveDir = 0; this.enemy.wantJump = false;
     this.enemy.startTurn(this);
     this.enemyPhase = 'think'; this.enemyTimer = 0;
     this.banner('ENEMY TURN', this.enemy.name, this.enemy.accent);
-    // open the player's per-turn pick (resolved during the enemy turn)
-    this.openPlayerPick();
   };
 
-  P.tryBeginPlayerTurn = function () {
-    if (this.pick && !this.pick.resolved) { this.turn = 'player'; this.phase = 'await'; return; }
-    this.beginPlayerTurn();
-  };
-
-  P.autoFire = function () {
-    if (this.phase === 'charging') this.fire(this.player, this.charge);
-    else this.fire(this.player, this.player.lastCharge || 0.5);
-    this.charging = false;
-  };
+  P.tryBeginPlayerTurn = function () { this.beginPlayerTurn(); };
 
   P.handlePlayerInput = function (dt) {
     const I = GB.Input, p = this.player;
+    // run
+    p.moveDir = (I.held('a', 'left') ? -1 : 0) + (I.held('d', 'right') ? 1 : 0);
+    // jump (rising edge of the held state — robust under fixed timestep)
+    const jh = I.held('w', 'up', 'space');
+    if (jh && !p._jumpHeld) p.wantJump = true;
+    p._jumpHeld = jh;
+    // aim toward the mouse cursor (world space)
+    const piv = p.pivot();
+    const dx = (this.cam.x + I.mx) - piv.x, dy = (this.cam.y + I.my) - piv.y;
+    p.facing = dx >= 0 ? 1 : -1;
+    p.aim = M.clamp(M.rad2deg(Math.atan2(-dy, Math.abs(dx) + 0.001)), -82, 89);
+    // hold mouse to charge, release to fire (ends the turn)
     if (this.phase === 'aim') {
-      if (I.held('w', 'up')) p.aim = M.clamp(p.aim + 46 * dt, -12, 89);
-      if (I.held('s', 'down')) p.aim = M.clamp(p.aim - 46 * dt, -12, 89);
-      if (I.held('a', 'left')) p.tryWalk(-1, this, dt);
-      if (I.held('d', 'right')) p.tryWalk(1, this, dt);
-      if (I.mousePressed || I.hit('space')) {
-        this.charging = true; this.charge = 0; this.chargeOwner = p; this.phase = 'charging';
-      }
-    } else if (this.phase === 'charging') {
+      if (I.mousePressed) { this.charging = true; this.charge = 0; this.chargeOwner = p; this.phase = 'charging'; }
+    } else {
       this.charge = Math.min(1, this.charge + GB.CHARGE_RATE * dt * p.chargeRate);
-      const released = (!I.mouseDown && !I.held('space'));
-      if (released) { this.fire(p, this.charge); this.charging = false; }
+      if (!I.mouseDown) { this.fire(p, this.charge); this.charging = false; }
+    }
+    // grab a loot box if standing on one
+    this.checkLoot(p, true);
+    // stream my position to the opponent (~12 Hz) so they see me move
+    if (this.online) {
+      this._moveAcc = (this._moveAcc || 0) + 1;
+      if (this._moveAcc >= 5) {
+        this._moveAcc = 0;
+        GB.Net.send({ t: 'move', x: Math.round(p.x), y: Math.round(p.y), vx: +p.vx.toFixed(1), vy: +p.vy.toFixed(1), f: p.facing, a: Math.round(p.aim) });
+      }
     }
   };
 
@@ -381,19 +449,24 @@
     switch (this.enemyPhase) {
       case 'think':
         this.enemyTimer += dt;
-        if (this.enemyTimer < 0.45) break;
+        if (this.enemyTimer < 0.4) break;
+        e.facing = p.x >= e.x ? 1 : -1;
         this.plan = GB.AI.plan(this, e, p);
-        this.enemyPhase = 'move'; this.enemyTimer = 0;
+        this.enemyPhase = 'move'; this.enemyTimer = 0; this._stuck = 0;
         break;
       case 'move': {
         this.enemyTimer += dt;
         const diff = this.plan.desiredX - e.x;
-        if (Math.abs(diff) > 5 && this.enemyTimer < 2.4 && e.energy > 1 && !e.airborne) {
-          e.tryWalk(M.sign(diff), this, dt);
+        if (Math.abs(diff) > 16 && this.enemyTimer < 2.6 && !e.dead) {
+          e.moveDir = M.sign(diff);
+          // hop if not making horizontal progress (blocked by a ledge/wall)
+          if (Math.abs(e.vx) < 0.7 && e.onGround) { this._stuck += dt; if (this._stuck > 0.22) { e.wantJump = true; this._stuck = 0; } }
+          else this._stuck = 0;
+          this.checkLoot(e, false);            // auto-grab loot it passes
         } else {
-          // settle the tilt and re-aim from the FINAL position before firing
-          e.groundAngle = e.terrainAngle(this.terrain);
-          this.plan = GB.AI.plan(this, e, p);
+          e.moveDir = 0;
+          e.facing = p.x >= e.x ? 1 : -1;
+          this.plan = GB.AI.plan(this, e, p);  // re-aim from the final position
           this.enemyPhase = 'aim'; this.enemyTimer = 0;
         }
         break;
@@ -440,7 +513,7 @@
     chargeT = M.clamp(chargeT, 0.06, 1);
     // online: tell the opponent to animate my shot (sent before simulating locally)
     if (this.online && shooter === this.player) {
-      GB.Net.send({ t: 'shot', aim: shooter.aim, charge: chargeT, x: Math.round(shooter.x), y: Math.round(shooter.y), ga: shooter.groundAngle || 0 });
+      GB.Net.send({ t: 'shot', aim: shooter.aim, charge: chargeT, x: Math.round(shooter.x), y: Math.round(shooter.y), f: shooter.facing });
     }
     const speed = M.lerp(shooter.powerMin, shooter.powerMax, chargeT);
     const tip = shooter.barrelTip();
@@ -725,21 +798,24 @@
     ctx.clearRect(0, 0, GB.W, GB.H);
     this.drawSky(ctx);
 
+    const cam = this.cam || (this.cam = { x: 0, y: 0 });
+    const cx = Math.round(cam.x), cy = Math.round(cam.y);
     ctx.save();
-    const sx = (Math.random() - 0.5) * this.shake;
-    const sy = (Math.random() - 0.5) * this.shake;
-    ctx.translate(sx, sy);
+    ctx.translate((Math.random() - 0.5) * this.shake - cx, (Math.random() - 0.5) * this.shake - cy);
 
-    ctx.drawImage(this.terrain.canvas, 0, 0);
+    // terrain (only the visible window, for performance)
+    ctx.drawImage(this.terrain.canvas, cx, cy, GB.W, GB.H, cx, cy, GB.W, GB.H);
+
+    // loot boxes
+    if (this.lootBoxes) for (const b of this.lootBoxes) b.draw(ctx, this.time);
 
     const active = this.turn === 'player' ? this.player : this.enemy;
     this.enemy.draw(ctx, this.time, active === this.enemy);
     this.player.draw(ctx, this.time, active === this.player);
 
-    // aim visuals for the active shooter (only during live combat; online shows only mine)
+    // aim visuals for the active shooter (online shows only mine)
     if (this.battlePhase === 'combat' && active && (!this.online || active === this.player) &&
         (this.phase === 'aim' || this.phase === 'charging') && this.bannerTime < 1.0 && !active.dead) {
-      UI.drawAimArc(ctx, active);
       if (this.charging && this.chargeOwner) UI.drawChargeCone(ctx, this.chargeOwner, this.charge, this.time);
       else UI.drawAimIndicator(ctx, active);
     }
@@ -750,13 +826,14 @@
     UI.drawWorldBars(ctx, this.enemy, this.time);
     UI.drawWorldBars(ctx, this.player, this.time);
     for (const fl of this.floaters) fl.draw(ctx);
+    if (this.battlePhase === 'coinflip') UI.drawCoinflipRing(ctx, this);
 
     ctx.restore();
 
     // unshaken HUD
     UI.drawTopBar(ctx, this);
     if (this.battlePhase === 'combat') { UI.drawControlsHint(ctx, this); UI.drawTurnTimer(ctx, this); }
-    if (this.battlePhase === 'coinflip') UI.drawCoinflip(ctx, this);
+    if (this.battlePhase === 'coinflip') UI.drawCoinflipHeadline(ctx, this);
     UI.drawBanner(ctx, this);
 
     // screen flash
@@ -834,9 +911,9 @@
     const p = {
       t: 'round',
       seed: (Math.random() * 1e9) | 0,
-      wind: +(Math.random() * 0.28 - 0.14).toFixed(4),
-      px: Math.round(150 + Math.random() * 170),
-      ex: Math.round(GB.W - 150 - Math.random() * 170),
+      wind: +(Math.random() * 0.24 - 0.12).toFixed(4),
+      px: Math.round(200 + Math.random() * 320),
+      ex: Math.round(GB.WORLD_W - 200 - Math.random() * 320),
       first: Math.random() < 0.5 ? 'host' : 'guest',
     };
     GB.Net.send(p);
@@ -844,32 +921,30 @@
   };
 
   P.buildOnlineRound = function (p) {
-    GB.seedRun(p.seed | 0);                       // identical terrain on both clients
+    GB.seedRun(p.seed | 0);                       // identical terrain + loot on both clients
     this.terrain = new GB.Terrain({ theme: GB.Terrain.THEMES[0] });
     this.wind = p.wind;
-    this.clouds = [];
-    for (let i = 0; i < 5; i++) this.clouds.push({ x: Math.random() * GB.W, y: 40 + Math.random() * 180, s: 0.6 + Math.random() * 0.9, v: (4 + Math.random() * 10) * (Math.random() < 0.5 ? 1 : -1) });
+    this.makeClouds();
 
     const iAmHost = this.netSide === 'host';
-    this.player.x = iAmHost ? p.px : p.ex;
-    this.player.facing = iAmHost ? 1 : -1;
-    this.enemy.x = iAmHost ? p.ex : p.px;
-    this.enemy.facing = iAmHost ? -1 : 1;
-    this.player.airborne = false; this.enemy.airborne = false;
+    const hostX = this.groundSpawnX(p.px), guestX = this.groundSpawnX(p.ex);
+    this.player.x = iAmHost ? hostX : guestX; this.player.facing = iAmHost ? 1 : -1;
+    this.enemy.x = iAmHost ? guestX : hostX; this.enemy.facing = iAmHost ? -1 : 1;
     this.player.settle(this); this.enemy.settle(this);
     this.player.tookDamageThisRound = false;
+    this.spawnLoot();                             // deterministic from the seed
+    this.centerCamOn(this.player);
 
     this.netFirst = (p.first === this.netSide) ? 'player' : 'enemy';
     this.player.firstShotMul = 1; this.enemy.firstShotMul = 1;
-    this.netOpenMine = false; this.netOpenOpp = false;
     this.netAwaitOppShot = false;
-    this.turn = null; this.phase = 'opening';
+    this.turn = null; this.phase = 'pre';
     this.charging = false; this.charge = 0; this.chargeOwner = null;
     this.shake = 0; this.flash = 0; this.turnCraters = [];
 
-    this.state = 'battle'; this.battlePhase = 'opening';
+    this.state = 'battle';
     UI.hideAll();
-    this.beginPick('mega', true);
+    this.startCoinflip(this.netFirst);            // loot boxes provide upgrades — no opening pick
   };
 
   P.netState = function (s) {
@@ -894,7 +969,7 @@
       this.turnCraters = [];
       if (this.player.dead) { this.endMatchOnline(false); return; }
       if (this.enemy.dead) { this.endMatchOnline(true); return; }
-      this.beginEnemyTurnOnline(true);
+      this.beginEnemyTurnOnline();
     } else {
       // opponent's shot was simulated locally for instant feedback — DON'T broadcast;
       // wait for their authoritative sync to confirm the outcome and hand the turn back
@@ -903,12 +978,12 @@
     }
   };
 
-  P.beginEnemyTurnOnline = function (openPick) {
+  P.beginEnemyTurnOnline = function () {
     this.turn = 'enemy'; this.phase = 'aim';
     this.charging = false; this.charge = 0; this.chargeOwner = null;
+    this.enemy.moveDir = 0;
     this.netAwaitOppShot = true;
     this.banner('OPPONENT TURN', this.oppName, this.enemy.accent);
-    if (openPick) this.openPlayerPick();
   };
 
   P.fireVisual = function (shooter, chargeT) {
@@ -939,10 +1014,17 @@
     switch (m.t) {
       case 'oppleft': this.onOppLeft(); break;
       case 'round': this.buildOnlineRound(m); break;
-      case 'pick':
+      case 'loot':
+        if (this.lootBoxes && this.lootBoxes[m.i]) this.lootBoxes[m.i].taken = true;
         if (GB.UP_BY_ID[m.id]) this.enemy.applyUpgrade(m.id);
-        if (m.phase === 'open') this.netOpenOpp = true;
-        else UI.toast(this.oppName + ' got ' + (GB.UP_BY_ID[m.id] ? GB.UP_BY_ID[m.id].name : 'an upgrade'));
+        UI.toast(this.oppName + ' grabbed ' + (GB.UP_BY_ID[m.id] ? GB.UP_BY_ID[m.id].name : 'loot'));
+        break;
+      case 'move':
+        if (this.turn === 'enemy') {
+          this.enemy.x = m.x; this.enemy.y = m.y; this.enemy.vx = m.vx || 0; this.enemy.vy = m.vy || 0;
+          if (m.f) this.enemy.facing = m.f;
+          if (m.a != null) this.enemy.aim = m.a;
+        }
         break;
       case 'shot': this.netRecvShot(m); break;
       case 'sync': this.netRecvSync(m); break;
@@ -951,9 +1033,10 @@
   };
 
   P.netRecvShot = function (m) {
-    // simulate the opponent's shot locally & immediately (real terrain + physics),
-    // so the joiner doesn't wait for the authoritative sync to see the ground break
-    this.enemy.x = m.x; this.enemy.aim = m.aim; this.enemy.groundAngle = m.ga || 0; this.enemy.airborne = false;
+    // simulate the opponent's shot locally & immediately (real terrain + physics)
+    this.enemy.x = m.x; this.enemy.y = m.y != null ? m.y : this.enemy.y;
+    this.enemy.aim = m.aim; if (m.f) this.enemy.facing = m.f;
+    this.enemy.vx = 0; this.enemy.vy = 0;
     this.netOppShotResolved = false;
     this.fire(this.enemy, m.charge);   // owner = enemy -> doesn't re-broadcast, doesn't record my craters
   };
